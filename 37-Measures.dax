@@ -1,0 +1,17 @@
+// UNEXECUTED DAX. Create each definition as a separate measure.
+
+PO Line Count = COUNTROWS(FactMatch)
+
+Received Qty = SUM(FactMatch[Received_Qty])
+
+Invoiced Qty = SUM(FactMatch[Invoiced_Qty])
+
+Invoice Amount EGP = SUM(FactMatch[Invoice_Amount_EGP])
+
+Invoice Price Variance EGP = SUM(FactMatch[Invoice_Price_Variance_EGP])
+
+Overbilled Qty = SUM(FactMatch[Overbilled_Qty])
+
+Exception Line Count = SUM(FactMatch[Exception_Flag])
+
+Exception Rate = DIVIDE([Exception Line Count], [PO Line Count])

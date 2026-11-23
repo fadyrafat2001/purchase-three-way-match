@@ -1,0 +1,160 @@
+# Purchase order receipt and invoice matching
+
+Status: synthetic source assets only, no executed Power BI report. Prepared with assistant support. Not prior independent work.
+
+## Business question
+Which PO lines need review because billed quantity exceeds receipts or invoice price differs from the PO?
+
+## Data and model
+12 unique PO lines. Receipts and invoices deliberately have split many-side rows; one unmatched row in each is seeded as an audit exception. FactMatch is precomputed at one row per PO line and can be rebuilt with the supplied aggregate-before-join M. Raw tables are staging only, no raw fact-to-fact joins.
+
+## Relationships
+DimSupplier and DimMonth each filter FactMatch, active 1:* single direction. Two relationships. Disable load for PurchaseOrders/Receipts/Invoices if using M; load orphan audit outputs as disconnected QA tables. If importing precomputed FactMatch, raw worksheets remain audit support, not additional additive report facts.
+
+## Import and implementation
+Open the accompanying XLSX in Power BI Desktop using Get data > Excel > Transform Data, or use Queries.pq with the WorkbookPath parameter. Each commented query block is a separate query, not one script to paste wholesale. Load only the named data sheets. Set explicit data types; parse dates with en-US where applicable. Remove auto-created relationships, then create the specified ones. Add DAX measures individually and format ratios as percentages, money as EGP. Hide unused fact columns and use dimension fields for filters.
+
+## Report pages
+Overview: invoice amount, exception count/rate, overbilled quantity and price variance by supplier. Exception detail: one PO line per row. QA: both orphan tables visible with row counts and excluded amount. Confirm FactMatch stays at 12 rows even though receipts and invoices are split. Review both M-rebuilt and precomputed table equality before calling the native test passed.
+
+## Tests
+Expected_Results.json was independently calculated from these inputs in Python. M/DAX have NOT been executed. Match whole-dataset results and relevant filters before calling the report complete. Check each dimension key is unique and non-null; each fact key matches a dimension; required numeric inputs have no nulls or errors. No silent replacement of missing values with zero. Test slicers, clear-all, cross-highlighting, tooltip and drill-through, and confirm totals do not duplicate after relationships. Save PBIX and capture report + Model view; record Desktop version, refresh date and test results.
+
+## Limits
+Simplified synthetic positive-quantity, single-currency matching with exact quantities and EGP 0.01 price-value tolerance. No freight/tax, returns, credit notes, payment, approval or fraud conclusion. Variance uses invoice quantity at PO price. Orphan rows are quarantined and explicitly excluded from matched KPIs, not lost. No receipts/invoices for a valid PO means zero activity, while missing required source fields are errors. Supplier/month comes from the PO. The month is PO period, not invoice or receipt date.
+
+## Sources for implementation
+https://learn.microsoft.com/en-us/power-bi/guidance/star-schema
+https://learn.microsoft.com/en-us/dax/sumx-function-dax
+
+
+PO_Line unique order line in PurchaseOrders and FactMatch, repeated foreign key in Receipts/Invoices. Supplier/Month from PO. Ordered_Qty, Receipt_Qty, Invoice_Qty are quantities of one comparable unit per PO line. PO_UnitPrice_EGP/Invoice_UnitPrice_EGP are unit prices. FactMatch Received_Qty and Invoiced_Qty are grouped sums. Invoice_Amount_EGP sums billed quantity times invoice unit price. Overbilled_Qty is max(invoiced-received,0); Overreceived_Qty is max(received-ordered,0). Invoice_Price_Variance_EGP is billed amount minus billed quantity at PO price. Exception_Flag is 1 when overbilled, overreceived or absolute price variance exceeds 0.01, else 0.
+
+
+{
+  "po_lines": 12,
+  "raw_receipt_rows": 23,
+  "raw_invoice_rows": 23,
+  "matched_received_qty": 1720,
+  "matched_invoiced_qty": 1740,
+  "matched_invoice_amount_egp": 46970,
+  "overbilled_qty": 20,
+  "invoice_price_variance_egp": 640,
+  "exception_lines": 3,
+  "orphan_receipt_rows": 1,
+  "orphan_invoice_rows": 1,
+  "orphan_invoice_amount_egp": 1485
+}
+
+{
+  "SUP-A": {
+    "invoice_amount": 15780,
+    "exception_lines": 0
+  },
+  "SUP-B": {
+    "invoice_amount": 18300,
+    "exception_lines": 2
+  },
+  "SUP-C": {
+    "invoice_amount": 12890,
+    "exception_lines": 1
+  }
+}
+
+EXACT UNEXECUTED M SOURCE
+// UNEXECUTED M SOURCE. Create text parameter WorkbookPath with full local XLSX path.
+// Create this function as fxSheet; invoke it once per data sheet below.
+(sheetName as text) as table =>
+let
+    Source = Excel.Workbook(File.Contents(WorkbookPath), null, true),
+    Data = Source{[Item=sheetName, Kind="Sheet"]}[Data],
+    Headers = Table.PromoteHeaders(Data, [PromoteAllScalars=true])
+in
+    Headers
+
+// Separate query named PurchaseOrders:
+let
+    Source = fxSheet("PurchaseOrders"),
+    Typed = Table.TransformColumnTypes(Source, {{"PO_Line", type text}, {"Supplier", type text}, {"Month", type text}, {"Ordered_Qty", type number}, {"PO_UnitPrice_EGP", type number}}, "en-US")
+in
+    Typed
+
+// Separate query named Receipts:
+let
+    Source = fxSheet("Receipts"),
+    Typed = Table.TransformColumnTypes(Source, {{"Receipt_ID", type text}, {"PO_Line", type text}, {"Receipt_Qty", type number}}, "en-US")
+in
+    Typed
+
+// Separate query named Invoices:
+let
+    Source = fxSheet("Invoices"),
+    Typed = Table.TransformColumnTypes(Source, {{"Invoice_ID", type text}, {"PO_Line", type text}, {"Invoice_Qty", type number}, {"Invoice_UnitPrice_EGP", type number}}, "en-US")
+in
+    Typed
+
+// Separate query named FactMatch:
+let
+    Source = fxSheet("FactMatch"),
+    Typed = Table.TransformColumnTypes(Source, {{"PO_Line", type text}, {"Supplier", type text}, {"Month", type text}, {"Ordered_Qty", type number}, {"PO_UnitPrice_EGP", type number}, {"Received_Qty", type number}, {"Invoiced_Qty", type number}, {"Invoice_Amount_EGP", type number}, {"Overbilled_Qty", type number}, {"Overreceived_Qty", type number}, {"Invoice_Price_Variance_EGP", type number}, {"Exception_Flag", type number}}, "en-US")
+in
+    Typed
+
+// Separate query named DimSupplier:
+let
+    Source = fxSheet("DimSupplier"),
+    Typed = Table.TransformColumnTypes(Source, {{"Supplier", type text}}, "en-US")
+in
+    Typed
+
+// Separate query named DimMonth:
+let
+    Source = fxSheet("DimMonth"),
+    Typed = Table.TransformColumnTypes(Source, {{"Month", type text}}, "en-US")
+in
+    Typed
+
+// OPTIONAL REPLACEMENT FactMatch QUERY. UNEXECUTED.
+// First create typed PurchaseOrders, Receipts and Invoices using the query blocks above.
+// Aggregate both many-side tables BEFORE any join. Never join raw receipt and invoice rows together.
+let
+    RG = Table.Group(Receipts, {"PO_Line"}, {{"Received_Qty", each List.Sum([Receipt_Qty]), type number}}),
+    IA = Table.AddColumn(Invoices, "LineAmount", each [Invoice_Qty] * [Invoice_UnitPrice_EGP], type number),
+    IG = Table.Group(IA, {"PO_Line"}, {{"Invoiced_Qty", each List.Sum([Invoice_Qty]), type number}, {"Invoice_Amount_EGP", each List.Sum([LineAmount]), type number}}),
+    JR = Table.NestedJoin(PurchaseOrders, {"PO_Line"}, RG, {"PO_Line"}, "R", JoinKind.LeftOuter),
+    ER = Table.ExpandTableColumn(JR, "R", {"Received_Qty"}),
+    JI = Table.NestedJoin(ER, {"PO_Line"}, IG, {"PO_Line"}, "I", JoinKind.LeftOuter),
+    EI = Table.ExpandTableColumn(JI, "I", {"Invoiced_Qty", "Invoice_Amount_EGP"}),
+    Z = Table.ReplaceValue(EI, null, 0, Replacer.ReplaceValue, {"Received_Qty", "Invoiced_Qty", "Invoice_Amount_EGP"}),
+    Q = Table.AddColumn(Z, "Overbilled_Qty", each List.Max({[Invoiced_Qty]-[Received_Qty],0}), type number),
+    O = Table.AddColumn(Q, "Overreceived_Qty", each List.Max({[Received_Qty]-[Ordered_Qty],0}), type number),
+    P = Table.AddColumn(O, "Invoice_Price_Variance_EGP", each [Invoice_Amount_EGP]-[Invoiced_Qty]*[PO_UnitPrice_EGP], type number),
+    F = Table.AddColumn(P, "Exception_Flag", each if [Overbilled_Qty]>0 or [Overreceived_Qty]>0 or Number.Abs([Invoice_Price_Variance_EGP])>0.01 then 1 else 0, Int64.Type)
+in
+    F
+
+// Separate audit query named OrphanReceipts (load as QA evidence, no relationship):
+Table.NestedJoin(Receipts, {"PO_Line"}, PurchaseOrders, {"PO_Line"}, "PO", JoinKind.LeftAnti)
+
+// Separate audit query named OrphanInvoices (load as QA evidence, no relationship):
+Table.NestedJoin(Invoices, {"PO_Line"}, PurchaseOrders, {"PO_Line"}, "PO", JoinKind.LeftAnti)
+
+
+EXACT UNEXECUTED DAX SOURCE
+// UNEXECUTED DAX. Create each definition as a separate measure.
+
+PO Line Count = COUNTROWS(FactMatch)
+
+Received Qty = SUM(FactMatch[Received_Qty])
+
+Invoiced Qty = SUM(FactMatch[Invoiced_Qty])
+
+Invoice Amount EGP = SUM(FactMatch[Invoice_Amount_EGP])
+
+Invoice Price Variance EGP = SUM(FactMatch[Invoice_Price_Variance_EGP])
+
+Overbilled Qty = SUM(FactMatch[Overbilled_Qty])
+
+Exception Line Count = SUM(FactMatch[Exception_Flag])
+
+Exception Rate = DIVIDE([Exception Line Count], [PO Line Count])
